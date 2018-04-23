@@ -1,0 +1,4 @@
+In building IntervalTree
+ - Indel has priority
+ 		- Bigger indel has priority
+ - SNVs

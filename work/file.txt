@@ -1,0 +1,4 @@
+chr1	1	A	T,G	HE
+chr1	50	-	ATG	HO
+chr1	100	A	C	HE
+chr1	150	ATC	-	HO

@@ -1,0 +1,4 @@
+chr1	1	AAC	-	HO
+chr1	6	T	A	HE
+chr1	980	A	T	HE
+chr1	981 CTT	- HO
