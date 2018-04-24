@@ -1,0 +1,30 @@
+
+
+
+
+[========================================================]
+
+[=====oooooooooooo=====================ooooooooooooo================ooooooooooo==============]
+
+      6          17                   39           51
+
+
+[===========================xxxxxxxxxxxxxxxxxxxxx========]
+
+
+AAAAAAAAAAA|CTGAAAAAAAAAAAAAAAAAAAA|CCCCCCCCCCCCCCCCCCCCCCCCC
+
+AAAAAAAAAAA|TTTTTTTTTTTTTTTCTGAAATT|TTTTTTTTTTTTTAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+AAAAAAAAAAA[xxxxxxxxxxxxx]AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+                      TTTTAAAAAAAAAAAAAAAAA
+
+AAAAAAAAAAAAAAATTTTTTTTTTTTTTTTTTTTTTTCCCCCCCCCCCCCCCCCCCCCCGGGGGGGGGGGGGGGGG
+
+          AAAAATTTTTTTTTTTTTTTTTTTTTTTCCCCCCCCCCC
+
+Se houver sobreposição: I - I pode. D - D,  C -C ganha a maior;
+                        I - D, I - C pode. D - I, C - I ganha a maior;
+
+AttAATTTCCCGGG

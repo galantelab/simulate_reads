@@ -15,13 +15,17 @@ use constant {
 
 my $fasta = shift;
 my $snp = shift;
+my $seed = shift || time();
+
+print "My seed $seed\n";
+srand $seed;
 
 my $fasta_index = _index_fasta($fasta);
 my $snp_index = index_snp($snp);
 
 my $code = sub {
 	my $node = shift;
-	printf "[%d - %d] max = %d\n" => $node->low, $node->high, $node->max;
+	printf "[%d - %d] max = %d shift %d\n" => $node->low, $node->high, $node->max, $node->data->{sft};
 };
 
 print "Finito!\n";
@@ -31,73 +35,122 @@ for my $seq_id (sort keys %$snp_index) {
 	print "chr = $seq_id\n";
 	$tree->inorder($code);
 }
-#print Dumper($snp_index);
-#my $pos = 0;
-#my $read_r = subseq(\$fasta_index->{chr1}{seq}, $fasta_index->{chr1}{size}, READ_SIZE, $pos);
-#print "read = $$read_r\nlength = ", length $$read_r, "\n";
-#my $variations = bs($snp_index->{chr1}, $pos, $pos + READ_SIZE - 1);
-#print Dumper($variations);
-#
-#for my $variation (@$variations) {
-#	if ($variation->{plo} eq 'HE' && int(rand(2))) {
-#		next;
-#	}
-#
-#	# TODO: FIx HERE ->
-#	# There is a problem with strctural variations. They shift
-#	# the sequence so that it cannot find the next changes by position
-#	# I think to solve, I need to make a tracker for the shift and when 
-#	# testing and substr the sequence, I correct  the position.
-#	# If the user request a big deletion, the read will be truncated and 
-#	# to solve the algorithm catch the rest needed from the reference fasta.
-#	# But if really it is a big deletion, or a deletion at the end of the read,
-#	# It cannot be sovlved and the deletion will be "truncated".
-#	my $position = $variation->{pos} - $pos;
-#	my $reference = $variation->{ref};
-#	my $alterations = $variation->{alt};
-#	my $alteration = $alterations->[int(rand(scalar @$alterations))];
-#
-#	# I need to test, again, if the reference pattern
-#	# still is there, because users may pass variations
-#	# too close that they overlap. In short, it causes
-#	# a race condition-like when the first one to occurs
-#	# gain the precedence.
-#	if ($reference eq '-') {
-#		# Insertion
+
+my $pos = 6;
+my $read_r = subseq(\$fasta_index->{chr1}{seq}, $fasta_index->{chr1}{size}, READ_SIZE, $pos);
+print "read = $$read_r\nlength = ", length $$read_r, "\n";
+
+my $end = $pos + READ_SIZE - 1;
+my $variations = $snp_index->{chr1}->search($pos, $end);
+
+my $is_ref = int(rand(2));
+print "Is ref? $is_ref\n";
+
+# The @$variations comes sorted by low.
+# My appprouch is catch the last one and apply the changes
+# on the sequence, next catch the penult and so on. This way
+# I avoid to implement a shift tracker
+for my $variation (reverse @$variations) {
+	my $data = $variation->data;
+
+	if ($is_ref && $data->{plo} eq 'HE') {
+		next;
+	}
+
+	print Dumper($data);
+
+	# TODO: FIx HERE ->
+	# There is a problem with strctural variations. They shift
+	# the sequence so that it cannot find the next changes by position
+	# I think to solve, I need to make a tracker for the shift and when
+	# testing and substr the sequence, I correct  the position.
+	# If the user request a big deletion, the read will be truncated and 
+	# to solve the algorithm catch the rest needed from the reference fasta.
+	# But if really it is a big deletion, or a deletion at the end of the read,
+	# It cannot be sovlved and the deletion will be "truncated".
+	my $position = $data->{pos} - $pos;
+	my $reference = $data->{ref};
+	my $alteration = $data->{alt};
+
+	# I need to test, again, if the reference pattern
+	# still is there, because users may pass variations
+	# too close that they overlap. In short, it causes
+	# a race condition-like when the first one to occurs
+	# gain the precedence.
+
+	# Test before the 4 possibilities of intersections:
+	#          [================] R
+	#      [-------] V
+	#                       [------] V
+	#              [-----] V        
+	#      [-----------------------] V
+	
+	my $length = 0;
+	my $ref_pos = 0;
+
+	if ($variation->low < $pos && $variation->high <= $end) {
+		$position = 0;
+		$length = $variation->high - $pos + 1;
+		$ref_pos = $pos - $variation->low;
+	} elsif ($variation->high > $end && $variation->low > $pos) {
+		$position = $variation->low - $pos;
+		$length = $end - $variation->low + 1;
+	} elsif ($variation->high <= $end && $variation->low >= $pos) {
+		$position = $variation->low - $pos;
+		$length = $variation->high - $variation->low + 1;
+	} else {
+		$position = 0;
+		$ref_pos = $pos - $variation->low;
+		$length = $end - $pos + 1;
+	}
+
+	# Insertion
+	if ($reference eq '-') {
 #		substr($$read_r, $position, 0) = $alteration;
-#	} elsif ($alteration eq '-') {
-#		# Deletion
+		substr($$read_r, $position, 0) = substr($alteration, $ref_pos, $length);
+
+	# Deletion
+	} elsif ($alteration eq '-') {
 #		if (substr($$read_r, $position, length($reference)) eq $reference) {
 #			substr($$read_r, $position, length($reference)) = "";
 #		}
-#	} else {
-#		# Change
-#		if (substr($$read_r, $position, length($reference)) eq $reference) {
-#			substr($$read_r, $position, length($reference)) = $alteration;
+		if (substr($$read_r, $position, $length) eq substr($reference, $ref_pos, $length)) {
+			substr($$read_r, $position, $length) = "";
+		}
+
+	# Change
+	} else {
+#		if (substr($$read_r, $position, $length) eq substr($reference, 0, $length)) {
+#			substr($$read_r, $position, $length) = $alteration;
 #		}
-#	}
-#}
-#
-#my $new_read_size = length $$read_r;
-#
-#if ($new_read_size < READ_SIZE) {
-#	my $missing = READ_SIZE - $new_read_size;
-#	my $beacon = $pos + READ_SIZE;
-#	substr($$read_r, $new_read_size, 0) = substr($fasta_index->{chr1}{seq}, $beacon, $missing);
-#	$new_read_size = length($$read_r);
-#	if ($new_read_size < READ_SIZE) {
-#		# May occur that the end of the fasta sequence suffers an deletion,
-#		# so I cannot guess how to fill the read size. In that case,
-#		# I fill the string with 'N's
-#		$missing = READ_SIZE - $new_read_size;
-#		substr($$read_r, $new_read_size, 0) = 'N' x $missing;
-#	}
-#} elsif ($new_read_size > READ_SIZE) {
-#	# Just truncate!
-#	$$read_r = substr($$read_r, 0, READ_SIZE);
-#}
-#
-#print "read = $$read_r\nlength = ", length $$read_r, "\n";
+		if (substr($$read_r, $position, $length) eq substr($reference, $ref_pos, $length)) {
+			substr($$read_r, $position, $length) = substr($alteration, $ref_pos, $length);
+		}
+	}
+}
+
+# Missing correction to the the new psition
+
+my $new_read_size = length $$read_r;
+
+if ($new_read_size < READ_SIZE) {
+	my $missing = READ_SIZE - $new_read_size;
+	my $beacon = $pos + READ_SIZE;
+	substr($$read_r, $new_read_size, 0) = substr($fasta_index->{chr1}{seq}, $beacon, $missing);
+	$new_read_size = length($$read_r);
+	if ($new_read_size < READ_SIZE) {
+		# May occur that the end of the fasta sequence suffers an deletion,
+		# so I cannot guess how to fill the read size. In that case,
+		# I fill the string with 'N's
+		$missing = READ_SIZE - $new_read_size;
+		substr($$read_r, $new_read_size, 0) = 'N' x $missing;
+	}
+} elsif ($new_read_size > READ_SIZE) {
+	# Just truncate!
+	$$read_r = substr($$read_r, 0, READ_SIZE);
+}
+
+print "read = $$read_r\nlength = ", length $$read_r, "\n";
 
 sub subseq {
 	my ($seq_ref, $seq_len, $slice_len, $pos) = @_;
@@ -124,6 +177,7 @@ sub index_snp {
 	my $line = 0;
 	# chr pos ref @obs he
 
+	LINE:
 	while (<$fh>) {
 		$line++;
 		chomp;
@@ -144,21 +198,16 @@ sub index_snp {
 			unless $fields[2] =~ /^(\w+|-)$/;
 
 		die "Fourth column, alteration, does not seem to be a valid entry: '$fields[3]' into file '$snp' at line $line\n"
-			unless $fields[3] =~ /^(\w+,*\w*|-)$/;
+			unless $fields[3] =~ /^(\w+|-)$/;
 
 		die "Fifth column, ploidy, has an invalid entry: '$fields[4]' into file '$snp' at line $line. Valid ones are 'HE' or 'HO'\n"
 			unless $fields[4] =~ /^(HE|HO)$/;
 
-		my @alterations = split /,/ => $fields[3];
-
-		for (my $i = 0; $i < @alterations; $i++) {
-			if ($fields[2] eq $alterations[$i]) {
-				warn "There is an alteration equal to the reference at '$snp' line $line. I will ignore it\n";
-				splice @alterations, $i, 1;
-			}
+		if ($fields[2] eq $fields[3]) {
+			warn "There is an alteration equal to the reference at '$snp' line $line. I will ignore it\n";
+			next;
 		}
 
-		next unless @alterations;
 #		my $num_of_alterations = scalar @alterations;
 
 #		die "Fourth column has more alterations ($num_of_alterations) than the ploidy ($ploidy) into file '$snp' at line $line\n"
@@ -182,7 +231,7 @@ sub index_snp {
 		my $position = $fields[1] - 1;
 
 		# Compare the alterations and reference to guess the max variation on sequence
-		my $size_of_variation = ( sort { $b <=> $a } map { length } @alterations, $fields[2] )[0];
+		my $size_of_variation = ( sort { $b <=> $a } map { length } $fields[3], $fields[2] )[0];
 
 		my $low = $position;
 		my $high = $position + $size_of_variation - 1;
@@ -195,34 +244,50 @@ sub index_snp {
 		# the saved alterations and compare it with the actual entry:
 		#    *** Remove all overlapping variations if actual entry is bigger;
 		#    *** Skip actual entry if it is lower than the biggest variation
-		if (@$nodes) {
-			# Catch the node with the biggest variation
-			my $node = ( sort {($b->high - $b->low) <=> ($a->high - $a->low)} @$nodes )[0];
-			my $size_of_variation_saved = $node->high - $node->low + 1;
+		#    *** Insertionw can be before any alterations
+		my @to_remove;
 
-			if ($size_of_variation_saved >= $size_of_variation) {
-				my $data = $node->data;
-				my $node_alt = join "," => @{ $data->{alt} };
-				$node_alt =~ s/,$//;
+		NODE:
+		for my $node (@$nodes) {
+			my $data = $node->data;
 
-				warn sprintf "Early alteration [%s %d %s %s %s] masks [%s %d %s %s %s] at '%s' line %d\n"
-					=> $fields[0], $data->{pos}, $data->{ref}, $node_alt, $data->{plo}, $fields[0], $position, $fields[2], $fields[3], $fields[4], $snp, $line;
+			# Insertion after insertion
+			if ($data->{ref} eq '-' && $fields[2] eq '-' && $fields[1] != $data->{pos}) {
+				next NODE;
 
-				next;
+			# Alteration after insertion
+			} elsif ($data->{ref} eq '-' && $fields[2] ne '-' && $fields[1] > $data->{pos}) {
+				next NODE;
+
+			# In this case, it gains the biggest one
 			} else {
-				warn sprintf "Alteration [%s %d %s %s %s] masks early declaration(s) at '%s' line %d\n"
-					=> $fields[0], $position, $fields[2], $fields[3], $fields[4], $snp, $line;
+				my $size_of_variation_saved = $node->high - $node->low + 1;
 
-				# Remove all nodes overlapping
-				$tree->delete($_->low, $_->high) for @$nodes;
+				if ($size_of_variation_saved >= $size_of_variation) {
+					warn sprintf "Early alteration [%s %d %s %s %s] masks [%s %d %s %s %s] at '%s' line %d\n"
+						=> $fields[0], $data->{pos}+1, $data->{ref}, $data->{alt}, $data->{plo}, $fields[0], $position+1,
+						$fields[2], $fields[3], $fields[4], $snp, $line;
+
+					next LINE;
+				} else {
+					warn sprintf "Alteration [%s %d %s %s %s] masks early declaration [%s %d %s %s %s] at '%s' line %d\n"
+						=> $fields[0], $position+1, $fields[2], $fields[3], $fields[4], $fields[0], $data->{pos}+1, $data->{ref},
+						$data->{alt}, $data->{plo}, $snp, $line;
+
+					push @to_remove => $node;
+				}
 			}
 		}
 
+		# Remove the overlapping node
+		$tree->delete($_->low, $_->high) for @to_remove;
+
 		my %variation = (
 			ref  => $fields[2],
-			alt  => \@alterations,
+			alt  => $fields[3],
 			plo  => $fields[4],
-			pos  => $position
+			pos  => $position,
+			sft  => 0
 		);
 
 		$tree->insert($low, $high, \%variation);
@@ -246,23 +311,50 @@ sub index_snp {
 		$tree->inorder($catcher);
 		my @to_remove;
 
+		# Validate node and at same time, set the shift factor,
+		# in order to correct the reference genome position
+		my $acm = 0;
+
 		for my $node (@nodes) {
 			my $data = $node->data;
-			next if $data->{ref} eq '-' && $data->{pos} < $size;
-			my $loc = index $$seq, $data->{ref}, $data->{pos};
-			if ($loc == -1 || $loc != $data->{pos}) {
-				warn "In validating '$snp': Not found reference '$data->{ref}' at fasta position $seq_id:",$data->{pos}+1,"\n";
-				push @to_remove => $node;
+
+			if ($data->{ref} ne '-' || $data->{pos} >= $size) {
+				my $loc = index $$seq, $data->{ref}, $data->{pos};
+
+				if ($loc == -1 || $loc != $data->{pos}) {
+					warn "In validating '$snp': Not found reference '$data->{ref}' at fasta position $seq_id:",$data->{pos}+1,"\n";
+					push @to_remove => $node;
+					next;
+				}
 			}
+
+			# Update shift tracker
+			$acm += $node->high == $node->low
+				? 0
+				: length($data->{ref}) < length($data->{alt})
+					? $node->high - $node->low + 1
+					: $node->low - $node->high - 1;
+
+			$data->{sft} = $acm;
 		}
+
+		my $new_size = $size + $acm;
+
+		if ($new_size < READ_SIZE) {
+			die "So many deletions on '$seq_id' resulted in a sequence lesser than the required read-size";
+		}
+
+		# I need to se the new weight based on the new size,
+		# according to he INDEL patterns found
+		$fasta_index->{$seq_id}{weight} = $new_size;
 
 		if (scalar @to_remove < scalar @nodes) {
 			$indexed_snp{$seq_id} = $tree;
 		}
 
-		$tree->delete($_->low, $_->high) for (@to_remove);
+		$tree->delete($_->low, $_->high) for @to_remove;
 	}
-	
+
 	return \%indexed_snp;
 }
 
@@ -300,7 +392,9 @@ sub _index_fasta {
 	}
 
 	for (keys %indexed_fasta) {
-		$indexed_fasta{$_}{size} = length $indexed_fasta{$_}{seq};
+		my $size = length $indexed_fasta{$_}{seq};
+		$indexed_fasta{$_}{size} = $size;
+		$indexed_fasta{$_}{weight} = $size;
 	}
 
 	unless (%indexed_fasta) {

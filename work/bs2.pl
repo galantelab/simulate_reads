@@ -64,5 +64,5 @@ $tree->inorder($code);
 print "Postorder traversal\n";
 $tree->postorder($code);
 
-my $nodes = $tree->search(2, 15);
+my $nodes = $tree->search(1, 1000);
 printf "[%d - %d]\n", $_->low, $_->high for @$nodes;
