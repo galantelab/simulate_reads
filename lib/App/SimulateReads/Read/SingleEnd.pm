@@ -22,7 +22,12 @@ sub gen_read {
 	}
 
 	$self->update_count_base($self->read_size);
-	$self->insert_sequencing_error($read_ref);
+	my $errors = $self->insert_sequencing_error($read_ref);
 
-	return ($read_ref, $read_pos);
+	my %detail = (
+		'pos'    => $read_pos,
+		'error'  => $errors
+	);
+
+	return ($read_ref, \%detail);
 }

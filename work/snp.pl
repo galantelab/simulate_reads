@@ -18,10 +18,10 @@ my $snp = shift;
 my $seed = shift || time();
 
 print "My seed $seed\n";
-srand $seed;
 
 my $fasta_index = _index_fasta($fasta);
 my $snp_index = index_snp($snp);
+my $src = $fasta_index->{chr1}->{seq};
 
 my $code = sub {
 	my $node = shift;
@@ -36,113 +36,272 @@ for my $seq_id (sort keys %$snp_index) {
 	$tree->preorder($code);
 }
 
-my $max_redo = 100;
-my $redo = 0;
-
-REDO:
-if ($redo >= 100) {
-	die "Max redo achieved: So many tries to introduce strutural variations. It may occur beacuse of the stochastic nature of the program. Maybe there are so many deletions into 'chr1'";
-}
-
 my $pos = 0;
-my $read_r = subseq(\$fasta_index->{chr1}{seq}, $fasta_index->{chr1}{size}, READ_SIZE, $pos);
+my $read_r = subseq(\$src, $fasta_index->{chr1}{size}, READ_SIZE, $pos);
 print "read = $$read_r\nlength = ", length $$read_r, "\n";
 
 my $end = $pos + READ_SIZE - 1;
-my $variations = $snp_index->{chr1}->search($pos, $end);
 #printf "[%d - %d] %s -> %s\n", $_->low, $_->high, $_->data->{ref}, $_->data->{alt} for @$variations;
 
-my $is_ref = int(rand(2));
-print "Is ref? $is_ref\n";
-
-# The @$variations comes sorted by low.
-# My appprouch is catch the last one and apply the changes
-# on the sequence, next catch the penult and so on. This way
-# I avoid to implement a shift tracker
-for my $variation (reverse @$variations) {
-	my $data = $variation->data;
-
-	if ($is_ref && $data->{plo} eq 'HE') {
-		next;
-	}
-
-	print Dumper($data);
-
-	# Test before the 4 possibilities of intersections:
-	my ($alt_pos, $ref_pos, $length);
-
-	#          [================] R
-	#      [-------] V
-	if ($variation->low < $pos && $variation->high <= $end) {
-		$ref_pos = 0;
-		$alt_pos = $pos - $variation->low;
-		$length = $variation->high - $pos + 1;
-
-	#          [================] R
-	#                       [------] V
-	} elsif ($variation->low >= $pos && $variation->high > $end) {
-		$ref_pos = $variation->low - $pos;
-		$alt_pos = 0;
-		$length = $end - $variation->low + 1;
-
-	#          [================] R
-	#              [-----] V        
-	} elsif ($variation->low >= $pos && $variation->high <= $end) {
-		$ref_pos = $variation->low - $pos;
-		$alt_pos = 0;
-		$length = $variation->high - $variation->low + 1;
-
-	#          [================] R
-	#      [-----------------------] V
-	} else {
-		$ref_pos = 0;
-		$alt_pos = $pos - $variation->low;
-		$length = $end - $pos + 1;
-	}
-
-	my $reference = $data->{ref};
-	my $alteration = $data->{alt};
-
-	# Insertion
-	if ($reference eq '-') {
-		substr($$read_r, $ref_pos, 0) = substr($alteration, $alt_pos, $length);
-
-	# Deletion
-	} elsif ($alteration eq '-') {
-		if (substr($$read_r, $ref_pos, $length) eq substr($reference, $alt_pos, $length)) {
-			substr($$read_r, $ref_pos, $length) = "";
-		}
-
-	# Change
-	} else {
-		if (substr($$read_r, $ref_pos, $length) eq substr($reference, $alt_pos, $length)) {
-			substr($$read_r, $ref_pos, $length) = substr($alteration, $alt_pos, $length);
-		}
-	}
-}
-
-# Missing correction to the the new psition
-
-my $new_read_size = length $$read_r;
-
-if ($new_read_size < READ_SIZE) {
-	my $missing = READ_SIZE - $new_read_size;
-	my $beacon = $pos + READ_SIZE;
-	substr($$read_r, $new_read_size, 0) = substr($fasta_index->{chr1}{seq}, $beacon, $missing);
-	$new_read_size = length($$read_r);
-	if ($new_read_size < READ_SIZE) {
-		# May occur that the end of the fasta sequence suffers an deletion,
-		# so I cannot guess how to fill the read size. In that case,
-		# In theat case, I raffle another position
-		$redo ++;
-		goto REDO;
-	}
-} elsif ($new_read_size > READ_SIZE) {
-	# Just truncate!
-	$$read_r = substr($$read_r, 0, READ_SIZE);
-}
-
+my $var = insert_structural_variation(\$fasta_index->{chr1}{seq}, $fasta_index->{chr1}{size}, $read_r, READ_SIZE, $pos, $snp_index->{chr1});
+print Dumper($var);
 print "read = $$read_r\nlength = ", length $$read_r, "\n";
+#my $max_redo = 100;
+#my $redo = 0;
+
+
+#REDO:
+#if ($redo >= 100) {
+#	die "Max redo achieved: So many tries to introduce strutural variations. It may occur beacuse of the stochastic nature of the program. Maybe there are so many deletions into 'chr1'";
+#}
+#
+#my $pos = 0;
+#my $read_r = subseq(\$fasta_index->{chr1}{seq}, $fasta_index->{chr1}{size}, READ_SIZE, $pos);
+#print "read = $$read_r\nlength = ", length $$read_r, "\n";
+#
+#my $end = $pos + READ_SIZE - 1;
+#my $variations = $snp_index->{chr1}->search($pos, $end);
+##printf "[%d - %d] %s -> %s\n", $_->low, $_->high, $_->data->{ref}, $_->data->{alt} for @$variations;
+#
+#my $is_ref = int(rand(2));
+#print "Is ref? $is_ref\n";
+#
+## The @$variations comes sorted by low.
+## My appprouch is catch the last one and apply the changes
+## on the sequence, next catch the penult and so on. This way
+## I avoid to implement a shift tracker
+#for my $variation (reverse @$variations) {
+#	my $data = $variation->data;
+#
+#	if ($is_ref && $data->{plo} eq 'HE') {
+#		next;
+#	}
+#
+#	print Dumper($data);
+#
+#	# Test before the 4 possibilities of intersections:
+#	my ($alt_pos, $ref_pos, $length);
+#
+#	#          [================] R
+#	#      [-------] V
+#	if ($variation->low < $pos && $variation->high <= $end) {
+#		$ref_pos = 0;
+#		$alt_pos = $pos - $variation->low;
+#		$length = $variation->high - $pos + 1;
+#
+#	#          [================] R
+#	#                       [------] V
+#	} elsif ($variation->low >= $pos && $variation->high > $end) {
+#		$ref_pos = $variation->low - $pos;
+#		$alt_pos = 0;
+#		$length = $end - $variation->low + 1;
+#
+#	#          [================] R
+#	#              [-----] V        
+#	} elsif ($variation->low >= $pos && $variation->high <= $end) {
+#		$ref_pos = $variation->low - $pos;
+#		$alt_pos = 0;
+#		$length = $variation->high - $variation->low + 1;
+#
+#	#          [================] R
+#	#      [-----------------------] V
+#	} else {
+#		$ref_pos = 0;
+#		$alt_pos = $pos - $variation->low;
+#		$length = $end - $pos + 1;
+#	}
+#
+#	my $reference = $data->{ref};
+#	my $alteration = $data->{alt};
+#
+#	# Insertion
+#	if ($reference eq '-') {
+#		substr($$read_r, $ref_pos, 0) = substr($alteration, $alt_pos, $length);
+#
+#	# Deletion
+#	} elsif ($alteration eq '-') {
+#		if (substr($$read_r, $ref_pos, $length) eq substr($reference, $alt_pos, $length)) {
+#			substr($$read_r, $ref_pos, $length) = "";
+#		}
+#
+#	# Change
+#	} else {
+#		if (substr($$read_r, $ref_pos, $length) eq substr($reference, $alt_pos, $length)) {
+#			substr($$read_r, $ref_pos, $length) = substr($alteration, $alt_pos, $length);
+#		}
+#	}
+#}
+#
+## Missing correction to the the new psition
+#
+#my $new_read_size = length $$read_r;
+#
+#if ($new_read_size < READ_SIZE) {
+#	my $missing = READ_SIZE - $new_read_size;
+#	my $beacon = $pos + READ_SIZE;
+#	substr($$read_r, $new_read_size, 0) = substr($fasta_index->{chr1}{seq}, $beacon, $missing);
+#	$new_read_size = length($$read_r);
+#	if ($new_read_size < READ_SIZE) {
+#		# May occur that the end of the fasta sequence suffers an deletion,
+#		# so I cannot guess how to fill the read size. In that case,
+#		# In theat case, I raffle another position
+#		$redo ++;
+#		goto REDO;
+#	}
+#} elsif ($new_read_size > READ_SIZE) {
+#	# Just truncate!
+#	$$read_r = substr($$read_r, 0, READ_SIZE);
+#}
+
+sub insert_structural_variation {
+	my ($src_ref, $src_len, $seq_ref, $seq_len, $pos, $tree) = @_;
+
+	my $max_redo = 100;
+	my $redo = 0;
+
+	# Raffle if this is the reference sequence
+	my $is_ref = 0;
+
+	# Try again if the sequence is truncated
+	REDO:
+
+	if ($redo >= 100) {
+		die "Max redo achieved: So many tries to introduce strutural variations. ",
+		"It may occur beacuse of the stochastic nature of the program. ",
+		"Maybe there are so many deletions\n";
+	}
+
+	my $var_apply = _insert_structural_variation($src_ref, $src_len,
+		$seq_ref, $seq_len, $pos, $tree, $is_ref);
+
+	my $new_size = length $$seq_ref;
+	my $shift = 0;
+
+	while ($new_size < $seq_len) {
+		print "new_size = $new_size seq_len = $seq_len\n";
+		my $missing = $seq_len - $new_size;
+		my $beacon = $pos + $seq_len + $shift;
+
+		print "beacon: $beacon missing: $missing\n";
+		my $seq_missing = substr $$src_ref, $beacon, $missing;
+		print "seq missing: $seq_missing\n";
+		my $size_missing = length $seq_missing;
+
+		if (($new_size + $size_missing) < $seq_len) {
+			# May occur that the end of the fasta sequence suffers an deletion,
+			# so I cannot guess how to fill the read size. In that case,
+			# In theat case, I raffle another position
+			($seq_ref, $pos) = subseq_rand($src_ref, $src_len, $seq_len);
+			$redo ++;
+			goto REDO;
+		}
+
+		my $var_apply_missing = _insert_structural_variation($src_ref, $src_len,
+			\$seq_missing, $size_missing, $beacon, $tree, $is_ref);
+		
+		$$seq_ref .= $seq_missing;
+		$new_size = length $$seq_ref;
+		$shift += $size_missing;
+		push @$var_apply => @$var_apply_missing;
+	}
+
+	if ($new_size > $seq_len) {
+		# Just truncate!
+		$$seq_ref = substr($$seq_ref, 0, $seq_len);
+	}
+
+	my $alt_pos = $pos;
+	# Correct position
+	if (@$var_apply) {
+		my $alt_pos = $var_apply->[0]->data->{lsft} + $pos;
+	}
+	my @var = map { $_->data } @$var_apply;
+
+	my %detail = (
+		'ref_pos' => $pos,
+		'alt_pos' => $alt_pos < 0 ? 0 : $alt_pos,
+		'var'     => \@var,
+		is_ref    => $is_ref
+	);
+
+	return \%detail;
+}
+
+sub _insert_structural_variation {
+	my ($src_ref, $src_len, $seq_ref, $seq_len, $pos, $tree, $is_ref) = @_;
+
+	my $end = $pos + $seq_len - 1;
+	my $variations = $tree->search($pos, $end);
+	my @var_apply;
+
+	# The @$variations comes sorted by low.
+	# My appprouch is catch the last one and apply the changes
+	# on the sequence, next catch the penult and so on. This way
+	# I avoid to implement a shift tracker
+	for my $variation (reverse @$variations) {
+		my $data = $variation->data;
+
+		if ($is_ref && $data->{plo} eq 'HE') {
+			next;
+		}
+
+		# Test before the 4 possibilities of intersections:
+		my ($alt_pos, $ref_pos, $length);
+
+		#          [================] R
+		#      [-------] V
+		if ($variation->low < $pos && $variation->high <= $end) {
+			$ref_pos = 0;
+			$alt_pos = $pos - $variation->low;
+			$length = $variation->high - $pos + 1;
+
+		#          [================] R
+		#                       [------] V
+		} elsif ($variation->low >= $pos && $variation->high > $end) {
+			$ref_pos = $variation->low - $pos;
+			$alt_pos = 0;
+			$length = $end - $variation->low + 1;
+
+		#          [================] R
+		#              [-----] V        
+		} elsif ($variation->low >= $pos && $variation->high <= $end) {
+			$ref_pos = $variation->low - $pos;
+			$alt_pos = 0;
+			$length = $variation->high - $variation->low + 1;
+
+		#          [================] R
+		#      [-----------------------] V
+		} else {
+			$ref_pos = 0;
+			$alt_pos = $pos - $variation->low;
+			$length = $end - $pos + 1;
+		}
+
+		my $reference = $data->{ref};
+		my $alteration = $data->{alt};
+
+		# Insertion
+		if ($reference eq '-') {
+			substr($$seq_ref, $ref_pos, 0) = substr($alteration, $alt_pos, $length);
+
+		# Deletion
+		} elsif ($alteration eq '-') {
+			if (substr($$seq_ref, $ref_pos, $length) eq substr($reference, $alt_pos, $length)) {
+				substr($$seq_ref, $ref_pos, $length) = "";
+			}
+
+		# Change
+		} else {
+			if (substr($$seq_ref, $ref_pos, $length) eq substr($reference, $alt_pos, $length)) {
+				substr($$seq_ref, $ref_pos, $length) = substr($alteration, $alt_pos, $length);
+			}
+		}
+
+		unshift @var_apply => $variation;
+	}
+
+	return \@var_apply;
+}
 
 sub subseq {
 	my ($seq_ref, $seq_len, $slice_len, $pos) = @_;
@@ -320,6 +479,9 @@ sub index_snp {
 				}
 			}
 
+			# keep track of the last shift
+			my $lsft = $acm;
+
 			# Update shift tracker
 			$acm += $node->high == $node->low
 				? 0
@@ -328,6 +490,7 @@ sub index_snp {
 					: $node->low - $node->high - 1;
 
 			$data->{sft} = $acm;
+			$data->{lsft} = $lsft;
 		}
 
 		my $new_size = $size + $acm;
