@@ -204,17 +204,20 @@ sub _search {
 		return;
 	}
 
+	# If left child of root is present and max of left child is
+	# greater than or equal to given interval, then i may
+	# overlap with an interval is left subtree
 	if ($root->left && $root->left->max >= $low) {
 		$self->_search($root->left, $low, $high, $nodes_a);
 	}
 
+	# If given interval overlaps with root
 	if ($self->_do_overlap($root, $low, $high)) {
 		push @$nodes_a => $root;
 	}
 
-	if ($root->right && $root->right->low <= $high) {
-		$self->_search($root->right, $low, $high, $nodes_a);
-	}
+	# Else interval can only overlap with right subtree
+	$self->_search($root->right, $low, $high, $nodes_a);
 }
 
 sub inorder {
@@ -256,8 +259,12 @@ sub _max_high_node {
 
 	if (defined $node->left && defined $node->right) {
 		$max = $node->left->max > $node->right->max
-			? $node->left->max
-			: $node->right->max;
+			? ($node->left->max > $node->high
+				? node->left->max
+				: $node->high)
+			: ($node->right->max > $node->high
+				? $node->right->max
+				: $node->high);
 	} elsif (defined $node->left) {
 		$max = $node->left->max > $node->high
 			? $node->left->max

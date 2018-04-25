@@ -33,15 +33,24 @@ print "Finito!\n";
 for my $seq_id (sort keys %$snp_index) {
 	my $tree = $snp_index->{$seq_id};
 	print "chr = $seq_id\n";
-	$tree->inorder($code);
+	$tree->preorder($code);
 }
 
-my $pos = 6;
+my $max_redo = 100;
+my $redo = 0;
+
+REDO:
+if ($redo >= 100) {
+	die "Max redo achieved: So many tries to introduce strutural variations. It may occur beacuse of the stochastic nature of the program. Maybe there are so many deletions into 'chr1'";
+}
+
+my $pos = 0;
 my $read_r = subseq(\$fasta_index->{chr1}{seq}, $fasta_index->{chr1}{size}, READ_SIZE, $pos);
 print "read = $$read_r\nlength = ", length $$read_r, "\n";
 
 my $end = $pos + READ_SIZE - 1;
 my $variations = $snp_index->{chr1}->search($pos, $end);
+#printf "[%d - %d] %s -> %s\n", $_->low, $_->high, $_->data->{ref}, $_->data->{alt} for @$variations;
 
 my $is_ref = int(rand(2));
 print "Is ref? $is_ref\n";
@@ -59,72 +68,55 @@ for my $variation (reverse @$variations) {
 
 	print Dumper($data);
 
-	# TODO: FIx HERE ->
-	# There is a problem with strctural variations. They shift
-	# the sequence so that it cannot find the next changes by position
-	# I think to solve, I need to make a tracker for the shift and when
-	# testing and substr the sequence, I correct  the position.
-	# If the user request a big deletion, the read will be truncated and 
-	# to solve the algorithm catch the rest needed from the reference fasta.
-	# But if really it is a big deletion, or a deletion at the end of the read,
-	# It cannot be sovlved and the deletion will be "truncated".
-	my $position = $data->{pos} - $pos;
-	my $reference = $data->{ref};
-	my $alteration = $data->{alt};
-
-	# I need to test, again, if the reference pattern
-	# still is there, because users may pass variations
-	# too close that they overlap. In short, it causes
-	# a race condition-like when the first one to occurs
-	# gain the precedence.
-
 	# Test before the 4 possibilities of intersections:
+	my ($alt_pos, $ref_pos, $length);
+
 	#          [================] R
 	#      [-------] V
-	#                       [------] V
-	#              [-----] V        
-	#      [-----------------------] V
-	
-	my $length = 0;
-	my $ref_pos = 0;
-
 	if ($variation->low < $pos && $variation->high <= $end) {
-		$position = 0;
+		$ref_pos = 0;
+		$alt_pos = $pos - $variation->low;
 		$length = $variation->high - $pos + 1;
-		$ref_pos = $pos - $variation->low;
-	} elsif ($variation->high > $end && $variation->low > $pos) {
-		$position = $variation->low - $pos;
+
+	#          [================] R
+	#                       [------] V
+	} elsif ($variation->low >= $pos && $variation->high > $end) {
+		$ref_pos = $variation->low - $pos;
+		$alt_pos = 0;
 		$length = $end - $variation->low + 1;
-	} elsif ($variation->high <= $end && $variation->low >= $pos) {
-		$position = $variation->low - $pos;
+
+	#          [================] R
+	#              [-----] V        
+	} elsif ($variation->low >= $pos && $variation->high <= $end) {
+		$ref_pos = $variation->low - $pos;
+		$alt_pos = 0;
 		$length = $variation->high - $variation->low + 1;
+
+	#          [================] R
+	#      [-----------------------] V
 	} else {
-		$position = 0;
-		$ref_pos = $pos - $variation->low;
+		$ref_pos = 0;
+		$alt_pos = $pos - $variation->low;
 		$length = $end - $pos + 1;
 	}
 
+	my $reference = $data->{ref};
+	my $alteration = $data->{alt};
+
 	# Insertion
 	if ($reference eq '-') {
-#		substr($$read_r, $position, 0) = $alteration;
-		substr($$read_r, $position, 0) = substr($alteration, $ref_pos, $length);
+		substr($$read_r, $ref_pos, 0) = substr($alteration, $alt_pos, $length);
 
 	# Deletion
 	} elsif ($alteration eq '-') {
-#		if (substr($$read_r, $position, length($reference)) eq $reference) {
-#			substr($$read_r, $position, length($reference)) = "";
-#		}
-		if (substr($$read_r, $position, $length) eq substr($reference, $ref_pos, $length)) {
-			substr($$read_r, $position, $length) = "";
+		if (substr($$read_r, $ref_pos, $length) eq substr($reference, $alt_pos, $length)) {
+			substr($$read_r, $ref_pos, $length) = "";
 		}
 
 	# Change
 	} else {
-#		if (substr($$read_r, $position, $length) eq substr($reference, 0, $length)) {
-#			substr($$read_r, $position, $length) = $alteration;
-#		}
-		if (substr($$read_r, $position, $length) eq substr($reference, $ref_pos, $length)) {
-			substr($$read_r, $position, $length) = substr($alteration, $ref_pos, $length);
+		if (substr($$read_r, $ref_pos, $length) eq substr($reference, $alt_pos, $length)) {
+			substr($$read_r, $ref_pos, $length) = substr($alteration, $alt_pos, $length);
 		}
 	}
 }
@@ -141,9 +133,9 @@ if ($new_read_size < READ_SIZE) {
 	if ($new_read_size < READ_SIZE) {
 		# May occur that the end of the fasta sequence suffers an deletion,
 		# so I cannot guess how to fill the read size. In that case,
-		# I fill the string with 'N's
-		$missing = READ_SIZE - $new_read_size;
-		substr($$read_r, $new_read_size, 0) = 'N' x $missing;
+		# In theat case, I raffle another position
+		$redo ++;
+		goto REDO;
 	}
 } elsif ($new_read_size > READ_SIZE) {
 	# Just truncate!
@@ -311,7 +303,7 @@ sub index_snp {
 		$tree->inorder($catcher);
 		my @to_remove;
 
-		# Validate node and at same time, set the shift factor,
+		# Validate node and, at same time, set the shift factor,
 		# in order to correct the reference genome position
 		my $acm = 0;
 
@@ -345,7 +337,7 @@ sub index_snp {
 		}
 
 		# I need to se the new weight based on the new size,
-		# according to he INDEL patterns found
+		# according to the INDEL patterns found
 		$fasta_index->{$seq_id}{weight} = $new_size;
 
 		if (scalar @to_remove < scalar @nodes) {
