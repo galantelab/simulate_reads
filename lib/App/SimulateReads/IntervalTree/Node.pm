@@ -32,7 +32,7 @@ has 'data' => (
 
 has [qw/left right/] => (
 	is         => 'rw',
-	isa        => 'Maybe[IntervalTree::Node]',
+	isa        => 'Maybe[App::SimulateReads::IntervalTree::Node]',
 	required   => 0
 );
 

@@ -77,7 +77,7 @@ sub _build_gen_header {
 		'%R' => '$info->{read}',
 		'%U' => '$info->{num}',
 		'%s' => '$info->{strand}',
-		'%E' => '$info->{error}',
+		'%X' => '$info->{error}',
 	);
 
 	return  $self->compile_template($self->template_id, 'info', \%sym_table);
@@ -98,11 +98,12 @@ sub _build_info {
 }
 
 sub sprint_fastq {
-	my ($self, $id, $num, $seq_id, $seq_ref, $seq_size, $is_leader) = @_;
+	my ($self, $id, $num, $seq_id, $seq_ref, $seq_size, $is_leader, $tree) = @_;
 
-	my ($read_ref, $detail_h) = $self->gen_read($seq_ref, $seq_size, $is_leader);
+	my ($read_ref, $detail_h) = $self->gen_read($seq_ref, $seq_size, $is_leader, $tree);
 
 	my ($start, $end) = ($detail_h->{pos} + 1, $detail_h->{pos} + $self->read_size);
+#	my ($start_alt, $end_alt) = $detail_h->{var} ($start, $end);
 
 	unless ($is_leader) {
 		($start, $end) = ($end, $start);

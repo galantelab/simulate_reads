@@ -6,6 +6,7 @@ use App::SimulateReads::Fastq::SingleEnd;
 use App::SimulateReads::Fastq::PairedEnd;
 use App::SimulateReads::InterlaceProcesses;
 use App::SimulateReads::WeightedRaffle;
+use App::SimulateReads::IntervalTree;
 use App::SimulateReads::DB::Handle::Expression;
 use Scalar::Util 'looks_like_number';
 use File::Cat 'cat';
@@ -43,6 +44,12 @@ has 'fasta_file' => (
 	is         => 'ro',
 	isa        => 'My:Fasta',
 	required   => 1
+);
+
+has 'snv_file' => (
+	is         => 'ro',
+	isa        => 'My:File',
+	required   => 0
 );
 
 has 'coverage' => (
@@ -99,6 +106,7 @@ has '_fasta_tree' => (
 	traits     => ['Hash'],
 	is         => 'ro',
 	isa        => 'HashRef[ArrayRef]',
+	default    => sub { {} },
 	handles    => {
 		_set_fasta_tree    => 'set',
 		_get_fasta_tree    => 'get',
@@ -112,6 +120,7 @@ has '_fasta_rtree' => (
 	traits     => ['Hash'],
 	is         => 'ro',
 	isa        => 'HashRef[Str]',
+	default    => sub { {} },
 	handles    => {
 		_set_fasta_rtree    => 'set',
 		_get_fasta_rtree    => 'get',
@@ -120,6 +129,13 @@ has '_fasta_rtree' => (
 		_fasta_rtree_pairs  => 'kv',
 		_has_no_fasta_rtree => 'is_empty'
 	}
+);
+
+has '_snv' => (
+	is         => 'ro',
+	isa        => 'HashRef[Maybe[App::SimulateReads::IntervalTree]]',
+	builder    => '_build_snv',
+	lazy_build => 1
 );
 
 has '_strand' => (
@@ -153,6 +169,7 @@ sub BUILD {
 	}
 
 	## Just to ensure that the lazy attributes are built before &new returns
+	$self->_snv;
 	$self->_seqid_raffle;
 	$self->_fasta;
 	$self->_strand;
@@ -209,7 +226,9 @@ sub _index_fasta {
 	}
 
 	for (keys %indexed_fasta) {
-		$indexed_fasta{$_}{size} = length $indexed_fasta{$_}{seq};
+		my $size = length $indexed_fasta{$_}{seq};
+		$indexed_fasta{$_}{size} = $size;
+		$indexed_fasta{$_}{weight} = $size;
 	}
 
 	unless (%indexed_fasta) {
@@ -343,7 +362,7 @@ sub _build_seqid_raffle {
 			};
 		}
 		when ('length') {
-			my %chr_size = map { $_, $self->_fasta->{$_}{size} } keys %{ $self->_fasta };
+			my %chr_size = map { $_, $self->_fasta->{$_}{weight} } keys %{ $self->_fasta };
 
 			my $raffler = App::SimulateReads::WeightedRaffle->new(
 				weights => \%chr_size
@@ -356,6 +375,220 @@ sub _build_seqid_raffle {
 		}
 	}
 	return $seqid_sub;
+}
+
+sub _build_snv {
+	my $self = shift;
+
+	my $snv = $self->snv_file;
+
+	if (not $snv) {
+		# Default to a HashRef of undef
+		return {};
+	}
+
+	log_msg ":: Indexing snv file '$snv' ...";
+	my $indexed_snv = $self->_index_snv;
+
+	log_msg ":: Validating snv file '$snv' ...";
+
+	# Validate  indexed_snv on the indexed_fasta
+	my $fasta_index = $self->_fasta;
+
+	for my $seq_id (keys %$indexed_snv) {
+		my $tree = delete $indexed_snv->{$seq_id};
+
+		my $seq = \$fasta_index->{$seq_id}{seq}
+			or next;
+		my $size = $fasta_index->{$seq_id}{size};
+
+		my @nodes;
+		my $catcher = sub { push @nodes => shift };
+
+		$tree->inorder($catcher);
+		my @to_remove;
+
+		# Validate node and, at same time, set the shift factor,
+		# in order to correct the reference genome position
+		my $acm = 0;
+
+		for my $node (@nodes) {
+			my $data = $node->data;
+
+			if ($data->{ref} ne '-' || $data->{pos} >= $size) {
+				my $loc = index $$seq, $data->{ref}, $data->{pos};
+
+				if ($loc == -1 || $loc != $data->{pos}) {
+					log_msg sprintf ":: In validating '%s': Not found reference '%s' at fasta position %s:%d\n",
+						$snv, $data->{ref}, $seq_id, $data->{pos} + 1;
+					push @to_remove => $node;
+					next;
+				}
+			}
+
+			# keep track of the last shift
+			my $lsft = $acm;
+
+			# Update shift tracker
+			$acm += $node->high == $node->low
+				? 0
+				: length($data->{ref}) < length($data->{alt})
+					? $node->high - $node->low + 1
+					: $node->low - $node->high - 1;
+
+			$data->{sft} = $acm;
+			$data->{lsft} = $lsft;
+		}
+
+		my $new_size = $size + $acm;
+
+		given (ref $self->fastq) {
+			when ('App::SimulateReads::Fastq::SingleEnd') {
+				if ($new_size < $self->fastq->read_size) {
+					die "So many deletions on '$seq_id' resulted in a sequence lesser than the required read-size\n";
+				}
+			}
+			when ('App::SimulateReads::Fastq::PairedEnd') {
+				if ($new_size < $self->fastq->fragment_mean) {
+					die "So many deletions on '$seq_id' resulted in a sequence lesser than the required fragment mean\n";
+				}
+			}
+			default {
+				die "Unknown option '$_'";
+			}
+		}
+
+		# I need to se the new weight based on the new size,
+		# according to the INDEL patterns found
+		$fasta_index->{$seq_id}{weight} = $new_size;
+
+		if (scalar @to_remove < scalar @nodes) {
+			$indexed_snv->{$seq_id} = $tree;
+		}
+
+		$tree->delete($_->low, $_->high) for @to_remove;
+	}
+
+	return $indexed_snv;
+}
+
+sub _index_snv {
+	my $self = shift;
+
+	my $snv = $self->snv_file;
+	my $fh = $self->my_open_r($snv);
+
+	my %indexed_snv;
+	my $line = 0;
+	# chr pos ref @obs he
+
+	LINE:
+	while (<$fh>) {
+		$line++;
+		chomp;
+		next if /^\s*$/;
+		my @fields = split;
+		die "Not found all fields (SEQID, POSITION, REFERENCE, OBSERVED, PLOIDY) into file '$snv' at line $line\n"
+			unless scalar @fields >= 5;
+
+		die "Second column, position, does not seem to be a number into file '$snv' at line $line\n"
+			unless looks_like_number($fields[1]);
+
+		die "Second column, position, has a value lesser or equal to zero into file '$snv' at line $line\n"
+			if $fields[1] <= 0;
+
+		$fields[1] = int($fields[1]);
+
+		die "Third column, reference, does not seem to be a valid entry: '$fields[2]' into file '$snv' at line $line\n"
+			unless $fields[2] =~ /^(\w+|-)$/;
+
+		die "Fourth column, alteration, does not seem to be a valid entry: '$fields[3]' into file '$snv' at line $line\n"
+			unless $fields[3] =~ /^(\w+|-)$/;
+
+		die "Fifth column, ploidy, has an invalid entry: '$fields[4]' into file '$snv' at line $line. Valid ones are 'HE' or 'HO'\n"
+			unless $fields[4] =~ /^(HE|HO)$/;
+
+		if ($fields[2] eq $fields[3]) {
+			warn "There is an alteration equal to the reference at '$snv' line $line. I will ignore it\n";
+			next;
+		}
+
+		if (not defined $indexed_snv{$fields[0]}) {
+			$indexed_snv{$fields[0]} = App::SimulateReads::IntervalTree->new;
+		}
+
+		my $tree = $indexed_snv{$fields[0]};
+
+		# Sequence inside perl begins at 0
+		my $position = $fields[1] - 1;
+
+		# Compare the alterations and reference to guess the max variation on sequence
+		my $size_of_variation = ( sort { $b <=> $a } map { length } $fields[3], $fields[2] )[0];
+
+		my $low = $position;
+		my $high = $position + $size_of_variation - 1;
+
+		my $nodes = $tree->search($low, $high);
+
+		# My rules:
+		# The biggest structural variation gains precedence.
+		# If occurs an overlapping, I search to the biggest variation among
+		# the saved alterations and compare it with the actual entry:
+		#    *** Remove all overlapping variations if actual entry is bigger;
+		#    *** Skip actual entry if it is lower than the biggest variation
+		#    *** Insertionw can be before any alterations
+		my @to_remove;
+
+		NODE:
+		for my $node (@$nodes) {
+			my $data = $node->data;
+
+			# Insertion after insertion
+			if ($data->{ref} eq '-' && $fields[2] eq '-' && $fields[1] != $data->{pos}) {
+				next NODE;
+
+			# Alteration after insertion
+			} elsif ($data->{ref} eq '-' && $fields[2] ne '-' && $fields[1] > $data->{pos}) {
+				next NODE;
+
+			# In this case, it gains the biggest one
+			} else {
+				my $size_of_variation_saved = $node->high - $node->low + 1;
+
+				if ($size_of_variation_saved >= $size_of_variation) {
+					log_msg sprintf ":: Early alteration [%s %d %s %s %s] masks [%s %d %s %s %s] at '%s' line %d\n"
+						=> $fields[0], $data->{pos}+1, $data->{ref}, $data->{alt}, $data->{plo}, $fields[0], $position+1,
+						$fields[2], $fields[3], $fields[4], $snv, $line;
+
+					next LINE;
+				} else {
+					log_msg sprintf ":: Alteration [%s %d %s %s %s] masks early declaration [%s %d %s %s %s] at '%s' line %d\n"
+						=> $fields[0], $position+1, $fields[2], $fields[3], $fields[4], $fields[0], $data->{pos}+1, $data->{ref},
+						$data->{alt}, $data->{plo}, $snv, $line;
+
+					push @to_remove => $node;
+				}
+			}
+		}
+
+		# Remove the overlapping node
+		$tree->delete($_->low, $_->high) for @to_remove;
+
+		my %variation = (
+			ref  => $fields[2],
+			alt  => $fields[3],
+			plo  => $fields[4],
+			pos  => $position,
+			sft  => 0
+		);
+
+		$tree->insert($low, $high, \%variation);
+	}
+
+	close $fh
+		or die "Cannot close snv file '$snv': $!\n";
+
+	return \%indexed_snv;
 }
 
 sub _calculate_number_of_reads {
@@ -426,6 +659,9 @@ sub run_simulation {
 
 	# Function that returns seqid by seqid_weight
 	my $seqid = $self->_seqid_raffle;
+
+	# Hash of snv's interval tree
+	my $snv_tree = $self->_snv;
 
 	# Fastq files to be generated
 	my %files = (
@@ -522,7 +758,7 @@ sub run_simulation {
 			my @fastq_entry;
 			try {
 				@fastq_entry = $self->sprint_fastq($tid, $i, $id,
-					\$fasta->{$id}{seq}, $fasta->{$id}{size}, $strand->());
+					\$fasta->{$id}{seq}, $fasta->{$id}{size}, $strand->(), $snv_tree->{$id});
 			} catch {
 				die "Not defined entry for seqid '>$id' at job $tid: $_";
 			} finally {

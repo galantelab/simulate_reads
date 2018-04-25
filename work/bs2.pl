@@ -29,40 +29,43 @@ my $code = sub {
 	printf "[%d - %d] max = %d height = %d\n" => $node->low, $node->high, $node->max, $node->height;
 };
 
-print "Preorder traversal\n";
-$tree->preorder($code);
-print "Inorder traversal\n";
-$tree->inorder($code);
 
-print "Remove [189 1000]\n";
-my $node = $tree->delete(189, 1000);
-print "Preorder traversal\n";
-$tree->preorder($code);
-print "Inorder traversal\n";
-$tree->inorder($code);
-
-print "Remove [1 5]\n";
-my $node = $tree->delete(1, 5);
-print "Preorder traversal\n";
-$tree->preorder($code);
-print "Inorder traversal\n";
-$tree->inorder($code);
-
-print "Remove [10 50]\n";
-my $node = $tree->delete(10, 50);
-print "Preorder traversal\n";
-$tree->preorder($code);
-print "Inorder traversal\n";
-$tree->inorder($code);
-
-print "Remove [5 200]\n";
-my $node = $tree->delete(5, 200);
-print "Preorder traversal\n";
-$tree->preorder($code);
-print "Inorder traversal\n";
-$tree->inorder($code);
-print "Postorder traversal\n";
-$tree->postorder($code);
-
-my $nodes = $tree->search(1, 1000);
-printf "[%d - %d]\n", $_->low, $_->high for @$nodes;
+my $node = $tree->left_near(1);
+print Dumper($node->data);
+#print "Preorder traversal\n";
+#$tree->preorder($code);
+#print "Inorder traversal\n";
+#$tree->inorder($code);
+#
+#print "Remove [189 1000]\n";
+#my $node = $tree->delete(189, 1000);
+#print "Preorder traversal\n";
+#$tree->preorder($code);
+#print "Inorder traversal\n";
+#$tree->inorder($code);
+#
+#print "Remove [1 5]\n";
+#my $node = $tree->delete(1, 5);
+#print "Preorder traversal\n";
+#$tree->preorder($code);
+#print "Inorder traversal\n";
+#$tree->inorder($code);
+#
+#print "Remove [10 50]\n";
+#my $node = $tree->delete(10, 50);
+#print "Preorder traversal\n";
+#$tree->preorder($code);
+#print "Inorder traversal\n";
+#$tree->inorder($code);
+#
+#print "Remove [5 200]\n";
+#my $node = $tree->delete(5, 200);
+#print "Preorder traversal\n";
+#$tree->preorder($code);
+#print "Inorder traversal\n";
+#$tree->inorder($code);
+#print "Postorder traversal\n";
+#$tree->postorder($code);
+#
+#my $nodes = $tree->search(1, 1000);
+#printf "[%d - %d]\n", $_->low, $_->high for @$nodes;

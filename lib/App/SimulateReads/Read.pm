@@ -240,20 +240,8 @@ sub _randb {
 sub insert_structural_variation {
 	my ($self, $src_ref, $src_len, $seq_ref, $seq_len, $pos, $tree) = @_;
 
-	my $max_redo = 100;
-	my $redo = 0;
-
 	# Raffle if this is the reference sequence
 	my $is_ref = int(rand(2));
-
-	# Try again if the sequence is truncated
-	REDO:
-
-	if ($redo >= 100) {
-		die "Max redo achieved: So many tries to introduce strutural variations. ",
-		"It may occur beacuse of the stochastic nature of the program. ",
-		"Maybe there are so many deletions\n";
-	}
 
 	my $var_apply = $self->_insert_structural_variation($src_ref, $src_len,
 		$seq_ref, $seq_len, $pos, $tree, $is_ref);
@@ -271,10 +259,8 @@ sub insert_structural_variation {
 		if (($new_size + $size_missing) < $seq_len) {
 			# May occur that the end of the fasta sequence suffers an deletion,
 			# so I cannot guess how to fill the read size. In that case,
-			# In theat case, I raffle another position
-			($seq_ref, $pos) = $self->subseq_rand($src_ref, $src_len, $seq_len);
-			$redo ++;
-			goto REDO;
+			# I return a undef value
+			return;
 		}
 
 		my $var_apply_missing = $self->_insert_structural_variation($src_ref, $src_len,
@@ -291,6 +277,7 @@ sub insert_structural_variation {
 		$$seq_ref = substr($$seq_ref, 0, $seq_len);
 	}
 
+	# TODO: Calculate alt_pos for all!
 	# Correct position
 	my $alt_pos = @$var_apply
 		? $var_apply->[0]->data->{lsft} + $pos
@@ -299,10 +286,9 @@ sub insert_structural_variation {
 	my @var = map { $_->data } @$var_apply;
 
 	my %detail = (
-		'ref_pos' => $pos,
 		'alt_pos' => $alt_pos < 0 ? 0 : $alt_pos,
-		'var'     => \@var,
-		is_ref    => $is_ref
+		'is_ref'  => $is_ref,
+		'var'     => \@var
 	);
 
 	return \%detail;

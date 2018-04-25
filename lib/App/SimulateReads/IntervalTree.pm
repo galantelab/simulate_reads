@@ -398,3 +398,35 @@ sub _postorder {
 		$code->($root);
 	}
 }
+
+sub left_near {
+	my ($self, $low) = @_;
+
+	my $near = $self->root;
+	$self->_left_near($self->root, \$near, $low);
+
+	return  $near;
+}
+
+sub _left_near {
+	my ($self, $root, $near_ref, $low) = @_;
+
+	if (not defined $root) {
+		return;
+	}
+
+	if ($root->low == $low) {
+		$$near_ref = $root;
+		return;
+	}
+
+	if ($root->low < $low && $root->low > $$near_ref->low) {
+		$$near_ref = $root;
+	}
+
+	if ($root->left && $root->left->max >= $low) {
+		$self->_left_near($root->left, $near_ref, $low);
+	}
+
+	$self->_left_near($root->right, $near_ref, $low);
+}
