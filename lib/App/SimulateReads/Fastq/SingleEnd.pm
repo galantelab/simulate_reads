@@ -78,6 +78,10 @@ sub _build_gen_header {
 		'%U' => '$info->{num}',
 		'%s' => '$info->{strand}',
 		'%X' => '$info->{error}',
+		'%a' => '$info->{start_alt}',
+		'%b' => '$info->{end_alt}',
+		'%v' => '$info->{var}',
+		'%z' => '$info->{ref}'
 	);
 
 	return  $self->compile_template($self->template_id, 'info', \%sym_table);
@@ -87,7 +91,6 @@ sub _build_info {
 	my $self = shift;
 
 	my %info = (
-#		instrument       => sprintf("SR%d", getppid),
 		instrument       => 'SR',
 		quality_profile  => $self->quality_profile,
 		read_size        => $self->read_size,
@@ -102,26 +105,62 @@ sub sprint_fastq {
 
 	my ($read_ref, $detail_h) = $self->gen_read($seq_ref, $seq_size, $is_leader, $tree);
 
+	# Set start - end regarding reference fasta
 	my ($start, $end) = ($detail_h->{pos} + 1, $detail_h->{pos} + $self->read_size);
-#	my ($start_alt, $end_alt) = $detail_h->{var} ($start, $end);
+
+	# If there are no structural variations, set default values
+	my ($start_alt, $end_alt) = ($start, $end);
+	my ($ref, $vars) = ('ref', 'none');
+
+	my $var_h = $detail_h->{var};
+
+	# Set  structural variation details
+	if ($var_h) {
+		# Set start - end regarding modified fasta
+		($start_alt, $end_alt) = ($var_h->{alt_pos} + 1, $var_h->{alt_pos} + $self->read_size);
+
+		# Set if this is the alternative seq_id
+		$ref = 'alt' unless $var_h->{is_ref};
+
+		my $vars_a = $var_h->{vars};
+
+		# Set variations string if any
+		if (@$vars_a) {
+			$vars = join ","
+				=> map { sprintf "%d:%s/%s:%s" => $_->{rpos} + 1, $_->{ref}, $_->{alt}, $_->{plo} }
+				@$vars_a;
+		}
+	}
+
+	# Set defaut sequencing errors
+	my $errors = 'none';
+	my $error_a = $detail_h->{error};
+
+	# Set errors if there are sequencing errors
+	if (@$error_a) {
+		$errors = join ","
+			=> map { sprintf "%d:%s/%s" => $_->{pos} + 1, $_->{b}, $_->{not_b} }
+			@$error_a;
+	}
 
 	unless ($is_leader) {
 		($start, $end) = ($end, $start);
+		($start_alt, $end_alt) = ($end_alt, $start_alt);
 	}
 
-	my $errors = join ","
-		=> map { sprintf "%d:%s/%s" => $_->{pos} + 1, $_->{b}, $_->{not_b} }
-		@{  $detail_h->{error} };
-
 	$self->_set_info(
-		'id'     => $id,
-		'num'    => $num,
-		'seq_id' => $seq_id,
-		'start'  => $start,
-		'end'    => $end,
-		'read'   => 1,
-		'strand' => $is_leader ? 'P' : 'M',
-		'error'  => $errors || 'no_error'
+		'id'        => $id,
+		'num'       => $num,
+		'seq_id'    => $seq_id,
+		'start'     => $start,
+		'end'       => $end,
+		'read'      => 1,
+		'strand'    => $is_leader ? 'P' : 'M',
+		'error'     => $errors,
+		'ref'       => $ref,
+		'start_alt' => $start_alt,
+		'end_alt'   => $end_alt,
+		'var'       => $vars
 	);
 
 	my $gen_header = $self->_gen_header;
