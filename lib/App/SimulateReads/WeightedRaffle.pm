@@ -11,6 +11,12 @@ has 'weights' => (
 	required   => 1
 );
 
+has 'keys' => (
+	is         => 'ro',
+	isa        => 'HashRef',
+	required   => 1
+);
+
 has '_weights' => (
 	is         => 'ro',
 	isa        => 'My:Weights',
@@ -47,16 +53,21 @@ sub _build_max_weight {
 sub _build_weights {
 	my $self = shift;
 	my $line = $self->weights;
+	my $keys = $self->keys;
 
 	my @weights;
 	my $left = 0;
 
 	for my $feature (sort keys %$line) {
+		my $key = $keys->{$feature}
+			or die "Cannot found '$feature' from weights into keys";
+
 		my %weight = (
 			down    => $left,
 			up      => $left + $line->{$feature} - 1,
-			feature => $feature
+			feature => $key
 		);
+
 		$left += $line->{$feature};
 		push @weights => \%weight;
 	}

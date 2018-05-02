@@ -133,7 +133,7 @@ has '_fasta_rtree' => (
 
 has '_snv' => (
 	is         => 'ro',
-	isa        => 'HashRef[Maybe[App::SimulateReads::IntervalTree]]',
+	isa        => 'HashRef[HashRef[Maybe[App::SimulateReads::IntervalTree]]]',
 	builder    => '_build_snv',
 	lazy_build => 1
 );
@@ -228,7 +228,6 @@ sub _index_fasta {
 	for (keys %indexed_fasta) {
 		my $size = length $indexed_fasta{$_}{seq};
 		$indexed_fasta{$_}{size} = $size;
-		$indexed_fasta{$_}{weight} = $size;
 	}
 
 	unless (%indexed_fasta) {
@@ -362,10 +361,38 @@ sub _build_seqid_raffle {
 			};
 		}
 		when ('length') {
-			my %chr_size = map { $_, $self->_fasta->{$_}{weight} } keys %{ $self->_fasta };
+			my (%chr_size, %keys);
+			my $snv_index = $self->_snv;
+
+			%chr_size =
+				map { $_  => {ref => $self->_fasta->{$_}{size}} }
+				keys %{ $self->_fasta };
+
+			if ($snv_index) {
+				my $size = 0;
+				my $catcher = sub { my $max = shift->high; $size = $max if $max > $size };
+
+				while (my ($seq_id, $type_h) = each %$snv_index) {
+					for my $t (qw/ref alt/) {
+						$size = 0;
+						my $tree = $type_h->{$t};
+						$tree->inorder($catcher);
+						$chr_size{$seq_id}{$t} = $size;
+					}
+				}
+			}
+
+			for my $seq_id (%chr_size) {
+				my $hash = delete $chr_size{$seq_id};
+				$chr_size{"${seq_id}_ref"} = $hash->{ref};
+				$keys{"${seq_id}_ref"} = {ref => 1, seq_id => $seq_id};
+				$chr_size{"${seq_id}_alt"} = $hash->{alt};
+				$keys{"${seq_id}_alt"} = {ref => 0, seq_id => $seq_id};
+			}
 
 			my $raffler = App::SimulateReads::WeightedRaffle->new(
-				weights => \%chr_size
+				weights => \%chr_size,
+				keys    => \%keys
 			);
 
 			$seqid_sub = sub { $raffler->weighted_raffle };
@@ -388,15 +415,17 @@ sub _build_snv {
 	}
 
 	log_msg ":: Indexing snv file '$snv' ...";
-	my $indexed_snv = $self->_index_snv;
+	my $snv_index = $self->_index_snv;
 
 	log_msg ":: Validating snv file '$snv' ...";
 
 	# Validate  indexed_snv on the indexed_fasta
 	my $fasta_index = $self->_fasta;
 
-	for my $seq_id (keys %$indexed_snv) {
-		my $tree = delete $indexed_snv->{$seq_id};
+	my %snv_builder;
+
+	for my $seq_id (keys %$snv_index) {
+		my $tree = delete $snv_index->{$seq_id};
 
 		my $seq = \$fasta_index->{$seq_id}{seq}
 			or next;
@@ -406,14 +435,10 @@ sub _build_snv {
 		my $catcher = sub { push @nodes => shift };
 
 		$tree->inorder($catcher);
-		my @to_remove;
 
-		# Validate node and, at same time, set the shift factor,
-		# in order to correct the reference genome position
-		my $acm = 0;
-
-		for my $node (@nodes) {
-			my $data = $node->data;
+		# Validate nodes concerning the position
+		for (my $i = 0; $i < @nodes; $i++) {
+			my $data = $nodes[$i]->data;
 
 			if ($data->{ref} ne '-' || $data->{pos} >= $size) {
 				my $loc = index $$seq, $data->{ref}, $data->{pos};
@@ -421,55 +446,116 @@ sub _build_snv {
 				if ($loc == -1 || $loc != $data->{pos}) {
 					log_msg sprintf ":: In validating '%s': Not found reference '%s' at fasta position %s:%d\n",
 						$snv, $data->{ref}, $seq_id, $data->{pos} + 1;
-					push @to_remove => $node;
-					next;
+					splice @nodes => $i, 1;
 				}
-			}
-
-			# keep track of the last shift
-			my $lsft = $acm;
-
-			# Update shift tracker
-			$acm += $node->high == $node->low
-				? 0
-				: length($data->{ref}) < length($data->{alt})
-					? $node->high - $node->low + 1
-					: $node->low - $node->high - 1;
-
-			$data->{sft} = $acm;
-			$data->{lsft} = $lsft;
-		}
-
-		my $new_size = $size + $acm;
-
-		given (ref $self->fastq) {
-			when ('App::SimulateReads::Fastq::SingleEnd') {
-				if ($new_size < $self->fastq->read_size) {
-					die "So many deletions on '$seq_id' resulted in a sequence lesser than the required read-size\n";
-				}
-			}
-			when ('App::SimulateReads::Fastq::PairedEnd') {
-				if ($new_size < $self->fastq->fragment_mean) {
-					die "So many deletions on '$seq_id' resulted in a sequence lesser than the required fragment mean\n";
-				}
-			}
-			default {
-				die "Unknown option '$_'";
 			}
 		}
 
-		# I need to se the new weight based on the new size,
-		# according to the INDEL patterns found
-		$fasta_index->{$seq_id}{weight} = $new_size;
+		my @nodes_ref = grep { $_->data->{'plo'} eq 'HO' } @nodes;
+		my $snv_ref = $self->_snv_constructo($size, \@nodes_ref);
+		my $snv_alt = $self->_snv_constructo($size, \@nodes);
 
-		if (scalar @to_remove < scalar @nodes) {
-			$indexed_snv->{$seq_id} = $tree;
-		}
+		# DEBUG
+#		my $printer = sub { my $node = shift; printf "[%d - %d] ref = %s alt = %s pos = %d size = %d\n", $node->low, $node->high, $node->data->{ref} || "none", $node->data->{alt} || "none", $node->data->{pos}, $node->data->{size}};
+#		print "ref\n";
+#		$snv_ref->inorder($printer);
+#		print "alt\n";
+#		$snv_alt->inorder($printer);
+#		exit 1;
 
-		$tree->delete($_->low, $_->high) for @to_remove;
+		$snv_builder{$seq_id} = {
+			ref => $snv_ref,
+			alt => $snv_alt
+		};
 	}
 
-	return $indexed_snv;
+	return \%snv_builder;
+}
+
+sub _snv_constructo {
+	my ($self, $seq_size, $nodes_a) = @_;
+
+	my $tree = App::SimulateReads::IntervalTree->new;
+	my $acm_pos = 0;
+	my $orig_pos = 0;
+
+	for my $node (@$nodes_a) {
+		my $node_data = $node->data;
+		my $position = $node_data->{'pos'};
+
+		if ($orig_pos < $position) {
+			# Insert the fasta reference part
+			my $size = $position - $orig_pos;
+			my $low = $acm_pos;
+			my $high = $acm_pos + $size - 1;
+
+			my %data = (
+				orig => 1,
+				pos  => $orig_pos,
+				size => $size
+			);
+
+			$tree->insert($low, $high, \%data);
+			$acm_pos += $size;
+			$orig_pos += $size;
+		} elsif ($orig_pos > $position) {
+			# $orig_pos > $position, there is a bug
+			die "\$orig_pos greater than \$position";
+		}
+
+		# HERE: $acm <= $position
+		my ($low, $high);
+		my %data = %$node_data;
+
+		$data{orig} = 0;
+		$data{pos} = $orig_pos;
+
+		if ($data{ref} eq '-') {
+			# Insertion
+			my $size = $data{size};
+			$low = $acm_pos;
+			$high = $acm_pos + $size - 1;
+
+			$acm_pos += $size;
+		} elsif ($data{alt} eq '-') {
+			# Deletion
+			my $size = $data{size};
+			$low = $acm_pos;
+			$high = $acm_pos;
+
+			$orig_pos += $size;
+		} else {
+			# Change or SNV
+			# Until the length of 'alt'
+			my $size = length $data{'alt'};
+			$low = $acm_pos;
+			$high = $acm_pos + $size - 1;
+
+			$acm_pos += $size;
+			$orig_pos += length $data{'ref'};
+		}
+
+		$tree->insert($low, $high, \%data);
+	}
+
+	if ($orig_pos <= $seq_size) {
+		my $size = $seq_size - $orig_pos;
+		my $low = $acm_pos;
+		my $high = $acm_pos + $size - 1;
+
+		my %data = (
+			orig => 1,
+			pos  => $orig_pos,
+			size => $size
+		);
+
+		$tree->insert($low, $high, \%data);
+	} else {
+		# Let's avoid bugs!
+		die "\$orig_pos greater than \$seq_size";
+	}
+
+	return $tree;
 }
 
 sub _index_snv {
@@ -579,7 +665,7 @@ sub _index_snv {
 			alt  => $fields[3],
 			plo  => $fields[4],
 			pos  => $position,
-			sft  => 0
+			size => $high - $low + 1
 		);
 
 		$tree->insert($low, $high, \%variation);
